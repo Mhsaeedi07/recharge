@@ -5,9 +5,7 @@ from accounts.models import Seller
 
 
 class PhoneNumber(models.Model):
-    """
-    Model to store phone numbers that can be charged
-    """
+
     number = models.CharField(
         max_length=20,
         unique=True
@@ -39,9 +37,7 @@ class PhoneNumber(models.Model):
 
 
 class ChargeSale(models.Model):
-    """
-    Model to track phone charge sales
-    """
+
     STATUS_CHOICES = [
         ('successful', 'Successful'),
         ('failed', 'Failed'),

@@ -4,13 +4,10 @@ from django.utils import timezone
 
 
 class User(AbstractUser):
-    """
-    Custom User model extending Django's AbstractUser
-    """
+
     is_seller = models.BooleanField(default=False)
     is_admin_user = models.BooleanField(default=False)
 
-    # Add related_name attributes to avoid clashes with auth.User
     groups = models.ManyToManyField(
         'auth.Group',
         related_name='custom_user_set',
@@ -34,9 +31,7 @@ class User(AbstractUser):
 
 
 class Seller(models.Model):
-    """
-    Seller model for users who sell phone charges
-    """
+
     user = models.OneToOneField(
         User,
         on_delete=models.CASCADE,

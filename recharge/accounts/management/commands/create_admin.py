@@ -15,18 +15,16 @@ class Command(BaseCommand):
         username = options['username']
         password = options['password']
 
-        # Check if user already exists
+
         if User.objects.filter(username=username).exists():
             self.stdout.write(self.style.WARNING(f'User with username "{username}" already exists'))
             user = User.objects.get(username=username)
-            # Update user to ensure they have admin privileges
             user.is_staff = True
             user.is_superuser = True
             user.is_admin_user = True
             user.save()
             self.stdout.write(self.style.SUCCESS(f'User "{username}" updated with admin privileges'))
         else:
-            # Create user
             user = User.objects.create_user(
                 username=username,
                 password=password,
@@ -36,7 +34,7 @@ class Command(BaseCommand):
             )
             self.stdout.write(self.style.SUCCESS(f'Admin user "{username}" created successfully'))
 
-        # Create token for API access
+
         token, created = Token.objects.get_or_create(user=user)
         if created:
             self.stdout.write(self.style.SUCCESS(f'API token created: {token.key}'))

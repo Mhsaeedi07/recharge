@@ -1,12 +1,13 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, connection
 
 from .models import PhoneNumber, ChargeSale
 from .serializers import PhoneNumberSerializer, ChargeSaleSerializer
 from credits.models import Transaction
 from recharge.permissions import IsSeller, IsAdminUser
+from accounts.models import Seller
 
 class PhoneNumberViewSet(viewsets.ModelViewSet):
 
@@ -36,7 +37,6 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
         return ChargeSale.objects.none()
 
     def create(self, request, *args, **kwargs):
-
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -44,8 +44,7 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
         amount = serializer.validated_data.get('amount')
         transaction_uuid = serializer.validated_data.get('transaction_uuid')
 
-
-        seller = request.user.seller_profile
+        seller_id = request.user.seller_profile.id
 
 
         if ChargeSale.objects.filter(transaction_uuid=transaction_uuid).exists():
@@ -56,8 +55,19 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
 
         try:
             with transaction.atomic():
+                # comment for sqlite
+                # connection.cursor().execute("SET LOCAL statement_timeout = '5s'")
+
 
                 phone_number = PhoneNumber.objects.select_for_update().get(id=phone_number_id)
+                seller = Seller.objects.select_for_update().get(id=seller_id)
+
+
+                if ChargeSale.objects.filter(transaction_uuid=transaction_uuid).exists():
+                    return Response(
+                        {"detail": "Transaction with this UUID already exists."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
 
                 if seller.credit < amount:
@@ -78,6 +88,7 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
                 import uuid
                 idempotency_key = f"charge_sale_{transaction_uuid}_{uuid.uuid4()}"
 
+
                 transaction_obj = Transaction.objects.create(
                     idempotency_key=idempotency_key,
                     seller=seller,
@@ -92,12 +103,12 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
 
 
                 seller.credit = new_seller_credit
-                seller.save()
+                seller.save(update_fields=['credit'])
 
 
                 phone_number.current_balance = phone_final_balance
                 phone_number.last_charge_date = timezone.now()
-                phone_number.save()
+                phone_number.save(update_fields=['current_balance', 'last_charge_date'])
 
 
                 charge_sale = ChargeSale.objects.create(
@@ -119,6 +130,11 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
         except PhoneNumber.DoesNotExist:
             return Response(
                 {"detail": "Phone number not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Seller.DoesNotExist:
+            return Response(
+                {"detail": "Seller profile not found."},
                 status=status.HTTP_404_NOT_FOUND
             )
         except Exception as e:

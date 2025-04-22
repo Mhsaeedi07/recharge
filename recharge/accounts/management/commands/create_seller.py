@@ -18,12 +18,12 @@ class Command(BaseCommand):
         password = options['password']
         initial_credit = options['credit']
 
-        # Check if user already exists
+
         if User.objects.filter(username=username).exists():
             self.stdout.write(self.style.WARNING(f'User with username "{username}" already exists'))
             user = User.objects.get(username=username)
         else:
-            # Create user
+
             user = User.objects.create_user(
                 username=username,
                 password=password,
@@ -31,7 +31,7 @@ class Command(BaseCommand):
             )
             self.stdout.write(self.style.SUCCESS(f'User "{username}" created successfully'))
 
-        # Check if seller profile exists
+
         if hasattr(user, 'seller_profile'):
             self.stdout.write(self.style.WARNING(f'Seller profile for "{username}" already exists'))
             seller = user.seller_profile
@@ -39,14 +39,12 @@ class Command(BaseCommand):
             seller.save()
             self.stdout.write(self.style.SUCCESS(f'Seller profile updated with credit: {initial_credit}'))
         else:
-            # Create seller profile
             seller = Seller.objects.create(
                 user=user,
                 credit=initial_credit
             )
             self.stdout.write(self.style.SUCCESS(f'Seller profile created with credit: {initial_credit}'))
 
-        # Create token for API access
         token, created = Token.objects.get_or_create(user=user)
         if created:
             self.stdout.write(self.style.SUCCESS(f'API token created: {token.key}'))

@@ -2,12 +2,13 @@ from rest_framework import viewsets, status, permissions, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, connection
 from .models import CreditRequest, Transaction
 from .serializers import CreditRequestSerializer, AdminCreditRequestSerializer, TransactionSerializer
 from recharge.permissions import IsSeller, IsAdminUser
-from .models import Transaction
+from accounts.models import Seller
 from django_filters.rest_framework import DjangoFilterBackend
+
 class CreditRequestViewSet(viewsets.ModelViewSet):
 
     serializer_class = CreditRequestSerializer
@@ -19,7 +20,6 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
         return CreditRequestSerializer
 
     def get_permissions(self):
-
         if self.action in ['list', 'retrieve', 'create']:
             permission_classes = [IsSeller | IsAdminUser]
         elif self.action in ['update', 'partial_update', 'destroy', 'process']:
@@ -41,9 +41,9 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def process(self, request, pk=None):
-
         credit_request = self.get_object()
         action_type = request.data.get('action', '').lower()
+
 
         if credit_request.status != 'pending':
             return Response(
@@ -59,13 +59,26 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
 
         try:
             with transaction.atomic():
+                # comment for sqlite
+                # connection.cursor().execute("SET LOCAL statement_timeout = '5s'")
+
+
+                credit_request = CreditRequest.objects.select_for_update().get(pk=credit_request.pk)
+                seller = Seller.objects.select_for_update().get(id=credit_request.seller.id)
+
+
+                if credit_request.status != 'pending':
+                    return Response(
+                        {"detail": f"This request has already been {credit_request.status} while processing."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
                 if action_type == 'approve':
 
                     import uuid
                     idempotency_key = f"credit_request_{credit_request.id}_{uuid.uuid4()}"
 
 
-                    seller = credit_request.seller
                     previous_credit = seller.credit
                     new_credit = previous_credit + credit_request.amount
 
@@ -84,30 +97,42 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
 
 
                     seller.credit = new_credit
-                    seller.save()
+                    seller.save(update_fields=['credit'])
 
 
                     credit_request.status = 'approved'
                     credit_request.processed_at = timezone.now()
-                    credit_request.save()
+                    credit_request.save(update_fields=['status', 'processed_at'])
 
                     return Response({
                         "detail": "Credit request approved successfully",
                         "transaction": TransactionSerializer(transaction_obj).data
                     })
                 else:
+
                     credit_request.status = 'rejected'
                     credit_request.processed_at = timezone.now()
-                    credit_request.save()
+                    credit_request.save(update_fields=['status', 'processed_at'])
 
                     return Response({
                         "detail": "Credit request rejected"
                     })
+        except CreditRequest.DoesNotExist:
+            return Response(
+                {"detail": "Credit request not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Seller.DoesNotExist:
+            return Response(
+                {"detail": "Seller not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
             return Response(
                 {"detail": f"Error processing credit request: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
 
 class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TransactionSerializer
