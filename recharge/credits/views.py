@@ -138,7 +138,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TransactionSerializer
     permission_classes = [IsSeller | IsAdminUser]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['transaction_type', 'status', 'created_at']
+    filterset_fields = ['transaction_type', 'status']
     search_fields = ['description', 'idempotency_key']
     ordering_fields = ['created_at', 'amount', 'status']
     ordering = ['-created_at']
