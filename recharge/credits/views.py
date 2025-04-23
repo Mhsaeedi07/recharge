@@ -2,13 +2,14 @@ from rest_framework import viewsets, status, permissions, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db import transaction, connection
+from django.db import transaction
+from django.contrib.contenttypes.models import ContentType
 from .models import CreditRequest, Transaction
 from .serializers import CreditRequestSerializer, AdminCreditRequestSerializer, TransactionSerializer
-from recharge.permissions import IsSeller, IsAdminUser
+from accounts.permissions import IsSeller, IsAdminUser
 from accounts.models import Seller
 from django_filters.rest_framework import DjangoFilterBackend
-
+import uuid
 class CreditRequestViewSet(viewsets.ModelViewSet):
 
     serializer_class = CreditRequestSerializer
@@ -44,7 +45,6 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
         credit_request = self.get_object()
         action_type = request.data.get('action', '').lower()
 
-
         if credit_request.status != 'pending':
             return Response(
                 {"detail": f"This request has already been {credit_request.status}."},
@@ -64,7 +64,6 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
 
 
                 credit_request = CreditRequest.objects.select_for_update().get(pk=credit_request.pk)
-                seller = Seller.objects.select_for_update().get(id=credit_request.seller.id)
 
 
                 if credit_request.status != 'pending':
@@ -73,14 +72,19 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
+                seller = Seller.objects.select_for_update().get(id=credit_request.seller.id)
+
                 if action_type == 'approve':
 
-                    import uuid
                     idempotency_key = f"credit_request_{credit_request.id}_{uuid.uuid4()}"
-
 
                     previous_credit = seller.credit
                     new_credit = previous_credit + credit_request.amount
+
+
+                    credit_request.status = 'approved'
+                    credit_request.processed_at = timezone.now()
+                    credit_request.save(update_fields=['status', 'processed_at'])
 
 
                     transaction_obj = Transaction.objects.create(
@@ -92,17 +96,14 @@ class CreditRequestViewSet(viewsets.ModelViewSet):
                         new_credit=new_credit,
                         description=f"Credit increase from request {credit_request.reference_id}",
                         status='successful',
-                        completed_at=timezone.now()
+                        completed_at=timezone.now(),
+                        content_type=ContentType.objects.get_for_model(CreditRequest),
+                        object_id=credit_request.id
                     )
 
 
                     seller.credit = new_credit
                     seller.save(update_fields=['credit'])
-
-
-                    credit_request.status = 'approved'
-                    credit_request.processed_at = timezone.now()
-                    credit_request.save(update_fields=['status', 'processed_at'])
 
                     return Response({
                         "detail": "Credit request approved successfully",

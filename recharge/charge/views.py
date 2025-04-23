@@ -1,14 +1,15 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db import transaction, connection
+from django.db import transaction
+from django.contrib.contenttypes.models import ContentType
 
 from .models import PhoneNumber, ChargeSale
 from .serializers import PhoneNumberSerializer, ChargeSaleSerializer
 from credits.models import Transaction
-from recharge.permissions import IsSeller, IsAdminUser
+from accounts.permissions import IsSeller, IsAdminUser
 from accounts.models import Seller
-
+import uuid
 class PhoneNumberViewSet(viewsets.ModelViewSet):
 
     queryset = PhoneNumber.objects.all()
@@ -24,7 +25,6 @@ class PhoneNumberViewSet(viewsets.ModelViewSet):
 
 
 class ChargeSaleViewSet(viewsets.ModelViewSet):
-
     serializer_class = ChargeSaleSerializer
     permission_classes = [IsSeller | IsAdminUser]
 
@@ -44,7 +44,7 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
         amount = serializer.validated_data.get('amount')
         transaction_uuid = serializer.validated_data.get('transaction_uuid')
 
-        seller_id = request.user.seller_profile.id
+        seller = request.user.seller_profile
 
 
         if ChargeSale.objects.filter(transaction_uuid=transaction_uuid).exists():
@@ -60,12 +60,12 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
 
 
                 phone_number = PhoneNumber.objects.select_for_update().get(id=phone_number_id)
-                seller = Seller.objects.select_for_update().get(id=seller_id)
+                seller = Seller.objects.select_for_update().get(id=seller.id)
 
 
                 if ChargeSale.objects.filter(transaction_uuid=transaction_uuid).exists():
                     return Response(
-                        {"detail": "Transaction with this UUID already exists."},
+                        {"detail": "Transaction with this UUID already exists (concurrent)."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
@@ -85,32 +85,6 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
                 phone_final_balance = phone_initial_balance + amount
 
 
-                import uuid
-                idempotency_key = f"charge_sale_{transaction_uuid}_{uuid.uuid4()}"
-
-
-                transaction_obj = Transaction.objects.create(
-                    idempotency_key=idempotency_key,
-                    seller=seller,
-                    amount=-amount,
-                    transaction_type='charge_sale',
-                    previous_credit=previous_seller_credit,
-                    new_credit=new_seller_credit,
-                    description=f"Charge sale for phone {phone_number.number}",
-                    status='successful',
-                    completed_at=timezone.now()
-                )
-
-
-                seller.credit = new_seller_credit
-                seller.save(update_fields=['credit'])
-
-
-                phone_number.current_balance = phone_final_balance
-                phone_number.last_charge_date = timezone.now()
-                phone_number.save(update_fields=['current_balance', 'last_charge_date'])
-
-
                 charge_sale = ChargeSale.objects.create(
                     transaction_uuid=transaction_uuid,
                     seller=seller,
@@ -121,6 +95,31 @@ class ChargeSaleViewSet(viewsets.ModelViewSet):
                     status='successful',
                     created_at=timezone.now()
                 )
+
+
+                idempotency_key = f"charge_sale_{transaction_uuid}_{uuid.uuid4()}"
+
+                transaction_obj = Transaction.objects.create(
+                    idempotency_key=idempotency_key,
+                    seller=seller,
+                    amount=-amount,
+                    transaction_type='charge_sale',
+                    previous_credit=previous_seller_credit,
+                    new_credit=new_seller_credit,
+                    description=f"Charge sale for phone {phone_number.number}",
+                    status='successful',
+                    completed_at=timezone.now(),
+                    content_type=ContentType.objects.get_for_model(ChargeSale),
+                    object_id=charge_sale.id
+                )
+
+
+                seller.credit = new_seller_credit
+                seller.save(update_fields=['credit'])
+
+                phone_number.current_balance = phone_final_balance
+                phone_number.last_charge_date = timezone.now()
+                phone_number.save(update_fields=['current_balance', 'last_charge_date'])
 
                 return Response(
                     self.get_serializer(charge_sale).data,
